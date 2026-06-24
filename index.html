@@ -699,6 +699,7 @@ function renderHorseTable(r){
     const empEV = _evx(empR, _eo);                           // 実測EV
     const popR  = empPopOnly(_ek, h.pop);                    // 人気のみ実測率
     const popEV = _evx(popR, _eo);
+    const _empFuku = empTan("複勝", h.pop, h.odds);          // 実測複勝率(常時, 人気×単勝オッズ)
     return `<div class="hcard ${cand?"cand":""} ${picked?"picked":""}" data-num="${h.num}">
       <div class="top">
         <span class="wnum" style="background:${wcol.bg};color:${wcol.fg}">${h.num}</span>
@@ -717,6 +718,10 @@ function renderHorseTable(r){
         ${evcell("中央EV",_evx(h.p_med,h.odds))}
         ${cell("最大勝率",h.p_max!=null?pct(h.p_max):"—")}
         ${evcell("最大EV",_evx(h.p_max,h.odds))}
+        ${cell("複勝確率",h.p_place!=null?pct(h.p_place):"—")}
+        ${evcell("複勝EV",_evx(h.p_place,h.podds))}
+        ${cell("実測複勝率",_empFuku!=null?pct(_empFuku):"—")}
+        ${evcell("実測複勝EV",_evx(_empFuku,h.podds))}
         ${cell("実測勝率",empR!=null?pct(empR):"—")}
         ${evcell("実測EV",empEV)}
         ${cell("人気実測",popR!=null?pct(popR):"—")}
@@ -738,7 +743,7 @@ function renderHorseTable(r){
       </select>
       <span class="hint"><span style="color:var(--teal)">●</span> 「候補」=この券種の買い候補 · カードをクリックで詳細</span></div>
     <div class="hint" style="padding:9px 16px;border-bottom:1px solid var(--line);line-height:1.6;background:var(--bg2)">
-      <b style="color:var(--gold)">見方</b> — 単勝=オッズ(倍) · <b style="color:var(--text)">担当/平均/最大勝率</b>=予測勝率(担当モデル / 全モデル平均 / 全モデル中の最大) · <b style="color:var(--text)">実測勝率</b>=人気×オッズ別の実績的中率 · <b style="color:var(--text)">人気実測</b>=人気のみの実績的中率 · EV=期待値(1超で妙味) · 票数=賛成したモデル数</div>
+      <b style="color:var(--gold)">見方</b> — 単勝=オッズ(倍) · <b style="color:var(--text)">担当/平均/最大勝率</b>=予測勝率(担当モデル / 全モデル平均 / 全モデル中の最大) · <b style="color:var(--text)">実測勝率</b>=人気×オッズ別の実績的中率 · <b style="color:var(--text)">複勝確率</b>=AI予測複勝率(複勝EV=複勝確率×複勝オッズ) · <b style="color:var(--text)">実測複勝率</b>=人気×単勝オッズ帯の実績複勝率(実測複勝EV=実測複勝率×複勝オッズ) · <b style="color:var(--text)">人気実測</b>=人気のみの実績的中率 · EV=期待値(1超で妙味) · 票数=賛成したモデル数</div>
     <div class="horse-cards">${cards}</div></div>`;
 }
 
@@ -855,7 +860,7 @@ function betKey(kind,sel){ const cfg=KCFG[kind];
   return cfg.ordered ? sel.join("-") : sel.slice().sort((a,b)=>a-b).join("-"); }
 
 /* ============ まとめ買い (ボックス/流し/フォーメーション/マルチ) ============ */
-let MM={method:"box",r:null,kind:"馬連",stake:100,box:[],axis:[],opp:[],groups:[[],[],[]]};
+let MM={method:"box",r:null,kind:"馬連",stake:100,box:[],axis:[],opp:[],groups:[[],[],[]],by:"num"};
 function _combos(arr,k){const r=[],n=arr.length;(function rec(s,c){if(c.length===k){r.push(c.slice());return;}for(let i=s;i<n;i++){c.push(arr[i]);rec(i+1,c);c.pop();}})(0,[]);return r;}
 function _perms(arr,k){const r=[],u=Array(arr.length).fill(false);(function rec(c){if(c.length===k){r.push(c.slice());return;}for(let i=0;i<arr.length;i++){if(u[i])continue;u[i]=true;c.push(arr[i]);rec(c);c.pop();u[i]=false;}})([]);return r;}
 function _cart(groups){let res=[[]];groups.forEach(g=>{const nx=[];res.forEach(cur=>g.forEach(x=>{if(!cur.includes(x))nx.push(cur.concat(x));}));res=nx;});return res;}
@@ -886,12 +891,26 @@ function mmCombos(){
 }
 function openMulti(){
   if(RACE_I<0)return; MM.r=DATA.races[RACE_I]; MM.kind=KIND;
-  MM.method="box"; MM.box=[]; MM.axis=[]; MM.opp=[]; MM.groups=[[],[],[]];
+  MM.method="box"; MM.box=[]; MM.axis=[]; MM.opp=[]; MM.groups=[[],[],[]]; MM.by="num";
   MM.stake=(DATA.meta&&DATA.meta.unit)||100;
   document.getElementById("multi-modal").style.display="flex"; mmRender();
 }
 function closeMulti(){ document.getElementById("multi-modal").style.display="none"; }
 function mmSetMethod(m){ MM.method=m; mmRender(); }
+function mmSetBy(b){ MM.by=b; mmRender(); }
+/* 表示用リスト: v=内部値(馬番/枠, canonical), label=画面表示(人気 or 馬番)。
+   人気モードは人気順に並べ、人気の付かない馬は除外。枠連(枠)は常に枠。 */
+function mmDisplayList(){
+  const r=MM.r, cfg=KCFG[MM.kind];
+  if(cfg.unit==="枠"){
+    return [...new Set(r.horses.map(h=>h.waku))].sort((a,b)=>a-b).map(w=>({v:w,label:w}));
+  }
+  if(MM.by==="pop"){
+    return r.horses.filter(h=>h.pop!=null).slice().sort((a,b)=>a.pop-b.pop)
+            .map(h=>({v:h.num,label:h.pop}));   // クリックは馬番(h.num)、表示は人気
+  }
+  return r.horses.map(h=>h.num).sort((a,b)=>a-b).map(n=>({v:n,label:n}));
+}
 function mmToggle(which,v,gi){
   let arr = which==="box"?MM.box : which==="axis"?MM.axis : which==="opp"?MM.opp : MM.groups[gi];
   const i=arr.indexOf(v); if(i>=0)arr.splice(i,1); else arr.push(v); mmRender();
@@ -905,8 +924,8 @@ function mmAll(which,gi){
   mmRender();
 }
 function _grid(which,selArr,gi){
-  const u=mmUnits();
-  const cells=u.map(v=>`<div class="mm-cell ${selArr.includes(v)?"on":""}" onclick="mmToggle('${which}',${v}${gi!=null?","+gi:""})">${selArr.includes(v)?"✓":""}${v}</div>`).join("");
+  const list=mmDisplayList();
+  const cells=list.map(it=>`<div class="mm-cell ${selArr.includes(it.v)?"on":""}" onclick="mmToggle('${which}',${it.v}${gi!=null?","+gi:""})">${selArr.includes(it.v)?"✓":""}${it.label}</div>`).join("");
   return `<div class="mm-grid">${cells}</div>`;
 }
 function _allBtn(which,gi){ return `<button class="mm-allbtn" onclick="mmAll('${which}'${gi!=null?","+gi:""})">全チェック/解除</button>`; }
@@ -916,6 +935,10 @@ function mmRender(){
   const tabsDef=[["box","ボックス"],["nagashi","流し"],["formation","フォーメーション"]];
   if(ord) tabsDef.push(["multi","マルチ"]);
   const tabs=tabsDef.map(([m,l])=>`<div class="mm-tab ${MM.method===m?"on":""}" onclick="mmSetMethod('${m}')">${l}</div>`).join("");
+  const byToggle = cfg.unit==="枠" ? "" :
+    `<div class="mm-tabs" style="margin-top:6px">`+
+    [["num","馬番で選択"],["pop","人気で選択"]].map(([b,l])=>`<div class="mm-tab ${MM.by===b?"on":""}" onclick="mmSetBy('${b}')">${l}</div>`).join("")+
+    `</div>`;
   let body="",desc="";
   if(MM.method==="box"){
     desc = ord?`チェックした馬で<b>全ての順列</b>を購入(${k}頭以上)`:`チェックした馬で<b>全組合せ</b>を購入(${k}頭以上)`;
@@ -944,7 +967,7 @@ function mmRender(){
     <button class="btn" ${cnt?"":"disabled"} onclick="mmAdd()">${cnt}点 追加</button>
   </div>`;
   document.getElementById("mm-content").innerHTML=
-    `<div class="mm-tabs">${tabs}</div><div class="mm-desc">${desc}</div>${body}${foot}`;
+    `<div class="mm-tabs">${tabs}</div>${byToggle}<div class="mm-desc">${desc}</div>${body}${foot}`;
 }
 function mmTotal(){ const c=mmCombos().length; const t=document.getElementById("mm-total"); if(t)t.textContent=yen(c*MM.stake); }
 function mmAdd(){
